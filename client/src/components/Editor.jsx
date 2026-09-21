@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import MonacoEditor from '@monaco-editor/react';
 import { MonacoBinding } from 'y-monaco';
-import { FileCode, Loader2, ZoomIn, ZoomOut } from 'lucide-react';
+import { FileCode, Loader2, ZoomIn, ZoomOut, Wifi, WifiOff } from 'lucide-react';
 
 export default function Editor({
   activeFile,
@@ -25,202 +25,165 @@ export default function Editor({
     return 14;
   });
 
-  const handleZoomIn = () => {
-    setFontSize((prev) => Math.min(prev + 2, 28));
-  };
+  const [isOnline, setIsOnline] = useState(()=> {
+    return typeof navigator !== 'undefined' ? navigator.onLine : true;
+  });
 
-  const handleZoomOut = () => {
-    setFontSize((prev) => Math.max(prev - 2, 10));
-  };
-
-  // Determine Monaco language from file extension
-  const getMonacoLanguage = (filename = '') => {
-    const ext = filename.split('.').pop()?.toLowerCase();
-    switch (ext) {
-      case 'py':
-        return 'python';
-      case 'js':
-      case 'jsx':
-        return 'javascript';
-      case 'cpp':
-      case 'cc':
-      case 'h':
-      case 'hpp':
-        return 'cpp';
-      case 'java':
-        return 'java';
-      case 'json':
-        return 'json';
-      case 'html':
-        return 'html';
-      case 'css':
-        return 'css';
-      case 'md':
-        return 'markdown';
-      default:
-        return 'plaintext';
-    }
-  };
-
-  // Setup / Rebind Monaco Editor with Yjs CRDT model when active file changes
   useEffect(() => {
-    if (!editorRef.current || !monacoRef.current || !activeFile || !awareness) return;
-
-    if (bindingRef.current) {
-      try {
-        bindingRef.current.destroy();
-      } catch (e) {
-        // ignore cleanup error
+    const handleOnline = () => {
+      setIsOnline(true);
+      if (activeFile && editorRef.current) {
+        const cached = localStorage.getItem('offline_${activeFile.id || activeFile.name}');
+        if (cached && !editorRef.current.getValue()){
+          editorRef.current.setValue(cached);
+        }
       }
-      bindingRef.current = null;
-    }
+    };
 
-    const yText = getYText(activeFile.id);
-    if (!yText) return;
+    const handleOffline = () => {
+      setIsOnline(false);
+    };
 
-    const editor = editorRef.current;
-    const monaco = monacoRef.current;
-    const model = editor.getModel();
+    window.addEventlistener('online', handleOnline);
+    window.addEventlistener('offline', handleOffline);
 
-    if (model) {
-      monaco.editor.setModelLanguage(model, getMonacoLanguage(activeFile.name));
+    return () => {
+      window.removeEventlistener('online', handleOnline);
+      window.removeEventlistener('offline', handleOffline);
+    };
+  }, [activeFile]);
 
-      try {
-        const binding = new MonacoBinding(
+  useEffect(() => {
+    if (!editorRef.current || !activeFile) return;
+    const disposable = editorRef.current.onDidChnageModelContent(() => {
+      setTimeout(() => {
+        try{
+          const currentContent = editorRef.current?.getValue();
+          if (currentContent !== undefined) { 
+            localStorage.setItem(
+              'offline_${activeFile.id || activeFile.name}',
+              currentContent
+            );
+        }
+      } catch (e) {
+        console.warn('LocalStorage linit reached or unavailable', e);
+      }
+    }, 0);
+  });
+
+  return () => disposable.dispose();
+}, [activeFile]);
+
+  const handleEditorDidMount= (editor, monaco)=>{
+    editorRef.current=editor;
+    editorRef.current=monaco;
+
+    if (getYText && awareness&& activeFile){
+      const yText= getYText(activeFile.id || activeFile.name);
+      if (yText){
+        if (bindingRef.current){
+          bindingRef.current.destory();
+        }
+
+        bindingRef.current=new MonacoBinding(
           yText,
-          model,
+          editor.getModel(),
           new Set([editor]),
           awareness
         );
-        bindingRef.current = binding;
-      } catch (err) {
-        console.error('MonacoBinding initialization error:', err);
       }
     }
 
-    return () => {
-      if (bindingRef.current) {
-        try {
-          bindingRef.current.destroy();
-        } catch (e) {
-          // ignore cleanup error
-        }
-        bindingRef.current = null;
-      }
-    };
-  }, [activeFile?.id, activeFile?.name, getYText, awareness, editorReady]);
-
-  // Handle Monaco mount and register shortcuts
-  const handleEditorDidMount = (editor, monaco) => {
-    editorRef.current = editor;
-    monacoRef.current = monaco;
     setEditorReady(true);
-
-    // 1. Run Code: Ctrl+Enter / Cmd+Enter
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
-      if (onRun) onRun();
-    });
-
-    // 2. Toggle Explorer: Ctrl+B / Cmd+B
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyB, () => {
-      if (onToggleExplorer) onToggleExplorer();
-    });
-
-    // 3. Toggle Output: Ctrl+J / Cmd+J
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyJ, () => {
-      if (onToggleOutput) onToggleOutput();
-    });
-
-    // 4. Save: Ctrl+S / Cmd+S (Prevent default browser save)
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {});
-
-    editor.focus();
   };
 
-  const monacoTheme = theme === 'dark' ? 'vs-dark' : 'light';
+  useEffect(()=>{
+    return ()=>{
+      if (bindingRef.current){
+        bindingRef.current.destroy();
+      }
+    };
+  }, [activeFile]);
+
+  const handleZoomIn=()=> setFontSize((prev)=> Math.min(prev + 1, 28));
+  const handleZoomOut=()=> setFontSize((prev)=> Math.max(prev - 1, 10));
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-[#0d1117] overflow-hidden relative">
-      {/* File Tab Bar with Zoom & Template Controls */}
-      <div className="h-9 border-b border-[#30363d] bg-[#161b22] flex items-center justify-between px-2 sm:px-3 select-none flex-shrink-0 gap-2">
-        <div className="flex items-center space-x-2 min-w-0">
-          {activeFile ? (
-            <div className="flex items-center space-x-2 px-3 py-1 bg-[#0d1117] border-t-2 border-blue-500 border-x border-[#30363d] rounded-t text-xs font-medium text-slate-200 shadow-inner truncate">
-              <FileCode size={13} className="text-blue-400 flex-shrink-0" />
-              <span className="font-mono text-[12px] truncate">{activeFile.name}</span>
-            </div>
-          ) : (
-            <div className="text-xs text-slate-400">No file open</div>
-          )}
-
-          {/* Quick Template Picker Button */}
-          {onOpenTemplates && (
-            <button
-              onClick={onOpenTemplates}
-              title="Insert Starter Templates / Presets"
-              className="flex items-center space-x-1 px-2 py-0.5 rounded bg-[#21262d] hover:bg-[#30363d] text-slate-300 hover:text-sky-400 border border-[#30363d] text-[11px] font-medium transition-colors"
-            >
-              <span>⚡ Templates</span>
-            </button>
-          )}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', backgroundColor: theme==='dark' ? '#1e1e1e' : '#ffffff' }}>
+      {/* Top Editor Toolbar */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: '6px 14px',
+          borderBottom:"1px solid #333",
+          backgroundColor: theme==='dark' ? '#252526' : '#f3f3f3',
+          color: theme==='dark' ? '#ccc' : '#333',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <FileCode size={16}/>
+          <span style={{ fontSize:'13px', fontWeight:'500'}}>
+            {activeFile ? activeFile.name: 'No file selected'}
+          </span>
         </div>
 
-        {/* Zoom In / Out Toolbar Controls */}
-        <div className="flex items-center space-x-1 flex-shrink-0">
-          <button
-            onClick={handleZoomOut}
-            title="Zoom Out Code (Decrease Font Size)"
-            className="p-1 hover:bg-[#21262d] rounded text-slate-400 hover:text-slate-200 transition-colors"
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {/* Accetance Criteria: Visible and accurate online / offline indicator badge*/}
+          <div
+            style={{
+              display: 'flex',
+              gap: '6px',
+              padding: '3px 10px',
+              borderRadius:'12px'
+              alignItems: 'center',
+              fontsize:"12px",
+              fontWeight:"600",
+              backgroundColor: isOnline ? 'rgbs(34, 197, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+              color: isOnline ? '#22c55e' : '#ef4444',
+              border: '1px solid $isOnline' ? 'rgbs(34, 197, 0.15)' : '1px solid rgba(239, 68, 68, 0.15)',
+            }}
           >
-            <ZoomOut size={14} />
+            {isOnline ? <Wifi size={13} /> : <wifiOff size={13} />}
+            <span>{isOnline ? 'Online' : 'Offline'}</span>
+          </div>
+
+          <button onClick={handleZoomOut} title='Zoom Out' style={{ background: 'transparent', border: 'none', color: 'inherit', cursor:'pointer'}}>
+            <ZoomOut size={16}/>
           </button>
-          <span className="text-[10px] font-mono text-slate-400 px-1 select-none">
-            {fontSize}px
-          </span>
-          <button
-            onClick={handleZoomIn}
-            title="Zoom In Code (Increase Font Size)"
-            className="p-1 hover:bg-[#21262d] rounded text-slate-400 hover:text-slate-200 transition-colors"
-          >
-            <ZoomIn size={14} />
+          <button onClick={handleZoomIn} title='Zoom In' style={{ background: 'transparent', border: 'none', color: 'inherit', cursor:'pointer'}}>
+            <ZoomIn size={16}/>
           </button>
+
+          {onRun && (
+            <button onClick={onRun} style={{ background: '#007acc', border: 'none', color:'#fff', borderRadius}:'4px', padding: '4px 10px', cursor:'pointer', fontSize:'12px'}} >
+              Run
+            </button>
+          ) : null}
         </div>
       </div>
 
-      {/* Monaco Container */}
-      <div className="flex-1 relative overflow-hidden">
+      {/*Monaco code Editor canvas*/}
+      <div style={{ flex: 1, position: 'relative' }} >
         <MonacoEditor
           height="100%"
-          language={activeFile ? getMonacoLanguage(activeFile.name) : 'plaintext'}
-          theme={monacoTheme}
-          loading={
-            <div className="flex items-center justify-center h-full space-x-2 text-slate-400">
-              <Loader2 className="animate-spin text-blue-500" size={20} />
-              <span className="text-sm">Initializing Monaco Editor...</span>
-            </div>
-          }
-          onMount={handleEditorDidMount}
+          language={activeFile?.language || 'javascript'}
+          theme={theme === 'dark' ? 'vs-dark' : 'light'}
           options={{
-            fontSize: fontSize,
-            fontFamily: "'Fira Code', 'JetBrains Mono', Menlo, Monaco, Consolas, monospace",
-            fontLigatures: true,
-            tabSize: 4,
-            insertSpaces: true,
-            wordWrap: 'on',
-            lineNumbers: 'on',
-            minimap: { enabled: typeof window !== 'undefined' && window.innerWidth >= 768, maxColumn: 80 },
-            scrollBeyondLastLine: false,
-            smoothScrolling: true,
-            mouseWheelZoom: true,
-            cursorBlinking: 'smooth',
-            cursorSmoothCaretAnimation: 'on',
-            bracketPairColorization: { enabled: true },
-            renderLineHighlight: 'all',
+            fontsize: fontSize,
+            minimap:{ enabled:true },
             automaticLayout: true,
-            padding: { top: 10, bottom: 10 },
+            scrollBeyondLastLine: false,
           }}
+          onMount={handleEditorDidMount}
+          loading={<loader2 size={24} className="animate-spin"/>}
         />
       </div>
     </div>
   );
 }
+
+    
+
+    
